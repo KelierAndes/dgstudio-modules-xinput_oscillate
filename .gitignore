@@ -1,0 +1,16 @@
+# ===== 本地环境与中间产物 =====
+__pycache__/
+*.pyc
+.vs/
+
+# ===== 运行时附属物（打包运行时装依赖到模块目录）=====
+modules/*/_deps/
+modules/*.downloading/
+modules/*.old/
+
+# ===== 本地调试日志 =====
+*.log
+
+# ===== zig/cl 构建副产物（构建脚本会重新生成）=====
+bridge/dist/*.lib
+bridge/dist/*.exp
