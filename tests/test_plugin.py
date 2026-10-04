@@ -47,6 +47,9 @@ class MetaLiteralTests(unittest.TestCase):
         assert "mods" not in value
         assert not any(k.startswith("host") or k.startswith("port")
                        for k in value["config"])
+        # 纯输入设计：无输出映射表、无可读参数声明
+        assert "outputs" not in value["config"]
+        assert "reads" not in value
 
     def test_config_decl_matches_bridge_defaults(self):
         """META["config"] 与 bridge.DEFAULTS 键集合一致、数值类型一致。"""
@@ -97,6 +100,7 @@ class ModuleClassTests(unittest.TestCase):
 class _LogCtx:
     def __init__(self):
         self.logs: list[str] = []
+        self.settings: dict = {}
 
     def log(self, msg: str) -> None:
         self.logs.append(str(msg))
@@ -143,10 +147,10 @@ class ModuleLifecycleTests(IsolatedAsyncioTestCase):
             def zap(self, channel, seconds=1.0, slot_id=None):
                 return _noop_coro()
 
-            def fire_start(self, slot_id=None):
+            def fire_start(self, slot_id=None, channel=None):
                 return _noop_coro()
 
-            def fire_stop(self, slot_id=None):
+            def fire_stop(self, slot_id=None, channel=None):
                 return _noop_coro()
 
             def emergency_stop(self):

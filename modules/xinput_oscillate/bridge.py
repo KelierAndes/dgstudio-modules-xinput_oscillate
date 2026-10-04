@@ -50,8 +50,7 @@ DEFAULTS = {
     "idle_ms": 1000,           # 链路超时：超时未收到反馈视为断开
     "refresh_s": 0.5,          # 设备状态变量参与表达式时的重算间隔
     "mappings": [],            # [{"param": 核心输入参数 id, "expr": 表达式}]
-    "outputs": [],             # [{"param": 核心输出参数 id, "name": 字段名,
-                               #   "expr": 表达式, "type": "Int"}]
+                               # 纯输入联动：无输出映射表
 }
 
 
@@ -215,11 +214,11 @@ class XInputBridge:
         def zap(self, channel, seconds=1.0, slot_id=None):
             return self._ctx.zap(channel, seconds, slot_id=slot_id)
 
-        def fire_start(self, slot_id=None):
-            return self._ctx.fire_start(slot_id=slot_id)
+        def fire_start(self, slot_id=None, channel=None):
+            return self._ctx.fire_start(slot_id=slot_id, channel=channel)
 
-        def fire_stop(self, slot_id=None):
-            return self._ctx.fire_stop(slot_id=slot_id)
+        def fire_stop(self, slot_id=None, channel=None):
+            return self._ctx.fire_stop(slot_id=slot_id, channel=channel)
 
         def emergency_stop(self):
             return self._ctx.emergency_stop()
@@ -288,12 +287,11 @@ class XInputBridge:
         return self._running
 
     def apply_config(self) -> None:
-        """装载两张映射表（首轮静默求值，避免启动即把设备写成 0）。"""
+        """装载输入映射表（首轮静默求值，避免启动即把设备写成 0）。"""
         first = not self._primed
         if first:
             self.engine.armed = False
         self.engine.set_mappings(self.config.get("mappings") or [])
-        self.engine.set_outputs(self.config.get("outputs") or [])
         if first:
             self.engine.armed = True
             self._primed = True
@@ -354,7 +352,7 @@ class XInputBridge:
             pass
 
     async def _pump_loop(self) -> None:
-        """设备状态变量随时间变化：定期重算两张映射表。"""
+        """设备状态变量随时间变化：定期重算输入映射表。"""
         try:
             while self._running:
                 interval = max(0.05, _num(self.config.get("refresh_s"), 0.5))

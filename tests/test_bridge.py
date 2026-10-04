@@ -57,12 +57,12 @@ class RecordingApi:
         self.calls.append(("zap", channel, seconds, slot_id))
         return _noop_coro()
 
-    def fire_start(self, slot_id=None):
-        self.calls.append(("fire_start", slot_id))
+    def fire_start(self, slot_id=None, channel=None):
+        self.calls.append(("fire_start", slot_id, channel))
         return _noop_coro()
 
-    def fire_stop(self, slot_id=None):
-        self.calls.append(("fire_stop", slot_id))
+    def fire_stop(self, slot_id=None, channel=None):
+        self.calls.append(("fire_stop", slot_id, channel))
         return _noop_coro()
 
     def emergency_stop(self):
@@ -100,10 +100,10 @@ class FakeCtx:
     def zap(self, channel, seconds=1.0, slot_id=None):
         return _noop_coro()
 
-    def fire_start(self, slot_id=None):
+    def fire_start(self, slot_id=None, channel=None):
         return _noop_coro()
 
-    def fire_stop(self, slot_id=None):
+    def fire_stop(self, slot_id=None, channel=None):
         return _noop_coro()
 
     def emergency_stop(self):
@@ -279,7 +279,7 @@ class FeedbackTests(unittest.TestCase):
         assert "zap" in kinds and "fire_start" in kinds and "emergency" in kinds
         bridge._on_feedback(0, 0, now + 0.1)
         bridge._feed(bridge.mixer.tick(now + 0.5))      # 回落越过激活阈值
-        assert ("fire_stop", "slot-ovc") in bridge._api.calls
+        assert ("fire_stop", "slot-ovc", None) in bridge._api.calls
 
 
 class KeyMapTests(unittest.TestCase):

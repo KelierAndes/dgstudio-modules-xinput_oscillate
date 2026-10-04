@@ -12,8 +12,7 @@
 * **实体手柄透传**（可选）：把实体手柄输入合并进虚拟手柄，游戏改用
   虚拟手柄后震动可观测。
 
-映射关系全部落在两张映射表上（``mappings`` / ``outputs``），核心参数名
-固定不可改；META["config"] 声明全部配置项，宿主自动装载 config/xinput.json，
+映射关系只落在一张输入映射表上（核心参数名固定不可改），META["config"] 声明全部配置项，宿主自动装载 config/xinput.json，
 联动页据此渲染映射表与模块设置。为安全起见默认映射表为空——不装任何
 映射就不会驱动任何设备。ViGEmBus 驱动需用户自行安装（模块启动时探测
 并降级），ViGEmClient.dll 随模块 bin/ 分发（官方 MIT 实现）。
@@ -22,7 +21,7 @@
 META = {
     "id": "xinput_oscillate",
     "name": "手柄震动联动（XInput）",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "description": "经 ViGEm 虚拟手柄接收游戏原生 XInput 震动派发（不注入游戏），"
                    "震动强度/状态经映射表达式驱动郊狼与负鼠；支持键盘键位映射"
                    "（无手柄调试）、实体手柄透传与回环自测。",
@@ -103,19 +102,13 @@ META = {
             "min": 0.1, "max": 5.0, "step": 0.1, "unit": "s",
             "group": "settings", "desc": "设备状态变量参与表达式运算时的重算节流",
         },
-        # ---- 两张映射表（配置文件只写这些） ----
+        # ---- 输入映射表（纯输入联动：模块只读震动、只写设备，无输出表） ----
         "mappings": {
             "label": "输入映射表", "type": "list", "default": [],
             "group": "map", "rows": "in",
             "desc": "行 {param: 核心输入参数, expr: 表达式}，以 {xvib_l}/{xvib_r}/"
                     "{xvib_max}/{xvib_active} 等组合驱动设备，可混合核心输出参数；"
                     "默认为空——不配置映射就不会驱动任何设备",
-        },
-        "outputs": {
-            "label": "输出映射表", "type": "list", "default": [],
-            "group": "map", "rows": "out",
-            "desc": "行 {param: 核心输出参数, name: 字段名, expr: 表达式}，"
-                    "本模块暂无回传消费端，可留空",
         },
     },
 }
@@ -149,6 +142,7 @@ class XInputOscillateModule(ModuleBase):
 
     def on_load(self, ctx) -> None:
         self.ctx = ctx
+        ctx.settings.pop("outputs", None)   # 0.2.0 遗留：输出表已取消
 
     def on_unload(self) -> None:
         self.bridge = None
