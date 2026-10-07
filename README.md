@@ -1,4 +1,4 @@
-# 手柄震动联动（xinput_oscillate）
+# 手柄震动联动（DGStudio 模块）
 
 DGStudio 联动模块：监听以 XInput 协议接入的手柄的**震动信息**，把游戏派发
 的震动强度与状态整理成模块参数，经联动页映射表驱动郊狼（电刺激）与负鼠
@@ -13,28 +13,16 @@ DGStudio 联动模块：监听以 XInput 协议接入的手柄的**震动信息*
 <https://github.com/nefarius/ViGEmBus/releases>；模块启动时自动探测，
 缺失时降级并给出日志指引）。
 
-## 工作原理
+* DGStudio 核心仓库：<https://github.com/KelierAndes/DG-Lab-Studio>
+* 模块市场仓库：<https://github.com/KelierAndes/dgstudio-modules-market>
 
-```
-游戏调用 XInputSetState(左马达, 右马达)          ← 游戏自己的震动派发通道
-        │  正常的 XInput 设备枚举（无注入、无钩子）
-        ▼
-虚拟 Xbox 360 手柄（ViGEmBus，本模块创建）
-        │  震动反馈通道（驱动回调：左右马达 0-255）
-        ▼
-本模块（包络整形：增益/死区 → 攻击即时 + 回落线性）
-        │ 模块参数（输入表达式以 {名称} 引用）
-{xvib_l} {xvib_r} {xvib_max} {xvib_active} {xvib_link} {xvib_pad}
-        │ 联动页「输入映射表」表达式（结果取整钳制后派发）
-        ▼
-郊狼/负鼠 通道强度 · 波形 · 瞬时脉冲 · 开火 · 急停
-```
+## 功能
 
 无实体手柄时，**键盘键位映射**把键盘输入合成到虚拟手柄（调试通道）；
 玩实体手柄时可开启**透传**，把实体手柄输入合并进虚拟手柄——游戏改用
 虚拟手柄后震动才能观测到。
 
-## 模块参数
+模块把观测到的震动整理为以下模块参数（联动页输入表达式中以 `{名称}` 引用）：
 
 | 参数 | 说明 |
 |---|---|
@@ -44,7 +32,17 @@ DGStudio 联动模块：监听以 XInput 协议接入的手柄的**震动信息*
 | `xvib_link` | 震动链路：超时窗口内收到游戏震动派发为 1 |
 | `xvib_pad` | 虚拟手柄就绪（游戏可见手柄）为 1 |
 
-## 模块设置
+## 安装
+
+1. **安装 ViGEmBus 驱动**（仅首次）：从官方 Releases 下载
+   `ViGEmBus_1.22.0_x64_x86_arm64.exe` 安装。模块启动时探测，未安装会
+   在日志中提示并降级（虚拟手柄不可用，仅测试注入可用）。
+2. **安装模块**：DGStudio 模块页 → 安装并启动。默认映射表为空——
+   **不配置映射就不会驱动任何设备**。
+
+## 配置与使用
+
+### 模块设置
 
 | 设置 | 默认 | 说明 |
 |---|---|---|
@@ -63,14 +61,9 @@ DGStudio 联动模块：监听以 XInput 协议接入的手柄的**震动信息*
 Start=Enter、Back=Backspace、左摇杆=WASD、右摇杆=IJKL、十字键=方向键、
 L3=C、R3=V。键名支持字母/数字、`Space`/`Enter`/`F1` 等常用名与 `0x` 十六进制。
 
-## 安装与使用
+### 配置映射与游玩
 
-1. **安装 ViGEmBus 驱动**（仅首次）：从官方 Releases 下载
-   `ViGEmBus_1.22.0_x64_x86_arm64.exe` 安装。模块启动时探测，未安装会
-   在日志中提示并降级（虚拟手柄不可用，仅测试注入可用）。
-2. **安装模块**：DGStudio 模块页 → 安装并启动。默认映射表为空——
-   **不配置映射就不会驱动任何设备**。
-3. **配置映射**：联动页本模块卡片 → 输入映射表添加行，例如：
+1. **配置映射**：联动页本模块卡片 → 输入映射表添加行，例如：
 
    | 核心输入参数 | 表达式 | 效果 |
    |---|---|---|
@@ -78,14 +71,17 @@ L3=C、R3=V。键名支持字母/数字、`Space`/`Enter`/`F1` 等常用名与 `
    | 郊狼通道 A 强度 | `{xvib_max}*{max}/100` | 按郊狼当前强度上限折算 |
    | 负鼠通道 A 瞬时脉冲 | `{xvib_active}` | 震动超过阈值来一下 1 秒脉冲 |
    | 郊狼开火 | `{xvib_active}` | 持续大震动期间持续开火 |
-4. **游玩**：启动游戏，在手柄设置里选择虚拟手柄（无实体手柄时它通常
+
+2. **游玩**：启动游戏，在手柄设置里选择虚拟手柄（无实体手柄时它通常
    就是唯一手柄）；游戏内触发震动即可联动。无手柄调试直接用键盘键位玩。
-5. **自测**：控制页绑定负鼠按键到本模块的两个动作——
+3. **自测**：控制页绑定负鼠按键到本模块的两个动作——
    「手柄震动测试脉冲…」（向链路注入合成震动，验证映射与设备）；
    「虚拟手柄回环测试…」（对虚拟手柄按 XInput 原生通道派发真实震动，
    验证完整反馈链路）。
 
-## 安全提示
+## 常见问题
+
+### 安全提示
 
 * 先把全局「最大强度上限」调低再试映射，确认行为后再放开；
 * 驾驶/射击类游戏存在持续微震动（路面、后坐力），死区与激活阈值
@@ -94,7 +90,7 @@ L3=C、R3=V。键名支持字母/数字、`Space`/`Enter`/`F1` 等常用名与 `
 * 游戏被关闭/崩溃时链路超时会让包络自动归零；请勿把 `{xvib_link}`
   反向映射成持续输出类动作。
 
-## 已知边界
+### 已知边界
 
 * 虚拟手柄与实体手柄同时存在时，游戏可能优先使用实体手柄的 XInput
   序号——此时请开启「实体手柄透传」，或用 HidHide 等手段对游戏屏蔽
@@ -105,21 +101,9 @@ L3=C、R3=V。键名支持字母/数字、`Space`/`Enter`/`F1` 等常用名与 `
 * 只覆盖走 XInput 的游戏；DirectInput 或原生 DualShock 路径不经
   XInput，观测不到。
 
-## 开发与测试
+## 许可
 
-```bash
-# 单元测试（需 DGStudio 核心仓库在同级目录，或设 DGSTUDIO_CORE）
-python -m unittest discover -s tests
-
-# 真实驱动集成测试（本机装有 ViGEmBus 时自动运行，否则跳过）
-python -m unittest tests.test_vigem_integration -v
-```
-
-`bin/ViGEmClient.dll` 自官方 MIT 实现（
-<https://github.com/nefarius/ViGEmClient> ）以 zig cc 从源码构建，许可
-全文见 `bin/LICENSE.ViGEmClient.txt`；重建命令：
-
-```bash
-python -m ziglang c++ -shared -O2 -DVIGEM_DYNAMIC -DVIGEM_EXPORTS \
-    src/ViGEmClient.cpp -Isrc -Iinclude -o ViGEmClient.dll -lsetupapi -lhid
-```
+本仓库代码以 GPL-3.0 发布（见 `LICENSE`）。随模块分发的
+`bin/ViGEmClient.dll` 源自官方 MIT 实现（
+<https://github.com/nefarius/ViGEmClient>），许可全文见
+`bin/LICENSE.ViGEmClient.txt`。

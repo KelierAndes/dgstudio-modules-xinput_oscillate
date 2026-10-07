@@ -1,5 +1,3 @@
-"""XInput 震动联动测试：包络混合（攻击/回落/死区/链路）、震动反馈换算、
-键盘键位解析与合成、输入合并、虚拟手柄组合与映射派发。"""
 from __future__ import annotations
 
 import asyncio
@@ -31,7 +29,6 @@ def _noop_coro():
 
 
 class RecordingApi:
-    """派发器记录桩：同步记录动作调用，协程直接丢弃。"""
 
     def __init__(self):
         self.calls: list[tuple] = []
@@ -74,7 +71,6 @@ class RecordingApi:
 
 
 class FakeCtx:
-    """宿主 ModuleContext 桩：仅实现桥用到的成员。"""
 
     def __init__(self):
         self.logs: list[str] = []
@@ -114,7 +110,6 @@ class FakeCtx:
 
 
 class FakeClient:
-    """ViGemClient 桩：记录状态更新，可手动触发震动反馈回调。"""
 
     def __init__(self):
         self.updates: list[dict] = []
@@ -151,7 +146,6 @@ class FakeClient:
 
 
 class FakePadReader:
-    """XInput 读取桩：按脚本返回手柄状态（默认 1 号位带探测标记）。"""
 
     def __init__(self, states: dict[int, dict | None] | None = None,
                  available: bool = True):
@@ -190,7 +184,7 @@ class RumbleMixerTests(unittest.TestCase):
 
     def test_gain_and_deadband(self):
         m = self._mixer(gain=2.0, deadband_pct=3.0)
-        m.on_packet(0, MOTOR_MAX // 4, MOTOR_MAX // 1000, now=0.0)  # 25%→50%, 0.1%→0
+        m.on_packet(0, MOTOR_MAX // 4, MOTOR_MAX // 1000, now=0.0)
         vals = m.tick(0.0)
         assert vals["xvib_l"] == 50.0
         assert vals["xvib_r"] == 0.0
@@ -198,7 +192,7 @@ class RumbleMixerTests(unittest.TestCase):
     def test_release_linear_decay(self):
         m = self._mixer(release_ms=1000)
         m.on_packet(0, MOTOR_MAX, 0, now=0.0)
-        m.on_packet(0, 0, 0, now=0.0)        # 游戏停止震动（发零）
+        m.on_packet(0, 0, 0, now=0.0)
         half = m.tick(0.5)
         assert half["xvib_l"] == 50.0
         done = m.tick(1.1)
@@ -206,10 +200,10 @@ class RumbleMixerTests(unittest.TestCase):
 
     def test_active_flag_follows_envelope(self):
         m = self._mixer(active_pct=30.0, release_ms=1000)
-        m.on_packet(0, MOTOR_MAX // 2, 0, now=0.0)          # 50%
+        m.on_packet(0, MOTOR_MAX // 2, 0, now=0.0)
         assert m.tick(0.0)["xvib_active"] == 1.0
         m.on_packet(0, 0, 0, now=0.0)
-        below = m.tick(0.25)                                 # 回落到 25% < 30%
+        below = m.tick(0.25)
         assert below["xvib_active"] == 0.0
         assert below["xvib_l"] == 25.0
 
@@ -222,15 +216,13 @@ class RumbleMixerTests(unittest.TestCase):
         assert after["xvib_l"] == 0.0
 
     def test_zero_only_stream_never_holds_link(self):
-        """纯零包（无任何非零震动）不应让链路显示活跃。"""
         m = self._mixer()
         m.on_packet(0, 0, 0, now=0.0)
         assert m.tick(0.1)["xvib_link"] == 0.0
 
     def test_sustained_rumble_holds_link(self):
-        """游戏按帧持续派发时链路保持活跃。"""
         m = self._mixer(idle_ms=500)
-        for i in range(24):                                  # 每 100ms 一包，共 2.3s
+        for i in range(24):
             m.on_packet(0, MOTOR_MAX // 2, 0, now=i * 0.1)
         vals = m.tick(2.4)
         assert vals["xvib_link"] == 1.0
@@ -238,7 +230,6 @@ class RumbleMixerTests(unittest.TestCase):
 
 
 class FeedbackTests(unittest.TestCase):
-    """震动反馈（0-255 马达）→ 原始值 → 包络/派发。"""
 
     def _bridge(self, mappings: list[dict], **overrides) -> XInputBridge:
         cfg = BridgeConfig({"mappings": mappings,
@@ -253,19 +244,19 @@ class FeedbackTests(unittest.TestCase):
     def test_motor_scale_to_mapping(self):
         bridge = self._bridge([{"param": "in_ovc_strength_a",
                                 "expr": "{xvib_max}"}])
-        bridge._on_feedback(195, 78, time.monotonic())  # 195*257≈76.5%, 78*257≈30.6%
+        bridge._on_feedback(195, 78, time.monotonic())
         strengths = [c for c in bridge._api.calls if c[0] == "strength"]
         assert strengths and strengths[-1][2] == 76
 
     def test_zero_feedback_decays_but_keeps_state(self):
         bridge = self._bridge([{"param": "in_ovc_strength_a",
                                 "expr": "{xvib_max}"}])
-        bridge._on_feedback(255, 255, now=0.0)          # 满震
+        bridge._on_feedback(255, 255, now=0.0)
         assert bridge.rx_count == 1
-        bridge._on_feedback(0, 0, now=0.1)              # 游戏显式归零
-        assert bridge.rx_count == 1                     # 零包不计链路活跃
+        bridge._on_feedback(0, 0, now=0.1)
+        assert bridge.rx_count == 1
         vals = bridge.mixer.tick(0.2)
-        assert vals["xvib_l"] < 100.0                   # 开始回落
+        assert vals["xvib_l"] < 100.0
 
     def test_dispatch_paths_via_feedback(self):
         bridge = self._bridge([
@@ -274,11 +265,11 @@ class FeedbackTests(unittest.TestCase):
             {"param": "in_emergency", "expr": "{xvib_link}"},
         ])
         now = time.monotonic()
-        bridge._on_feedback(255, 0, now)                # 链路上升沿 + 激活
+        bridge._on_feedback(255, 0, now)
         kinds = [c[0] for c in bridge._api.calls]
         assert "zap" in kinds and "fire_start" in kinds and "emergency" in kinds
         bridge._on_feedback(0, 0, now + 0.1)
-        bridge._feed(bridge.mixer.tick(now + 0.5))      # 回落越过激活阈值
+        bridge._feed(bridge.mixer.tick(now + 0.5))
         assert ("fire_stop", "slot-ovc", None) in bridge._api.calls
 
 
@@ -311,7 +302,6 @@ class KeyMapTests(unittest.TestCase):
     def test_apply_synthesis(self):
         km = KeyMap()
         fields = km.apply({0x20, 0x51, 0x26, 0x57, 0x33})
-        # Space→A 键, Q→B 键, Up→十字上, W→左摇杆上, 3→左扳机
         assert fields["wButtons"] == 0x1000 | 0x2000 | 0x0001
         assert fields["bLeftTrigger"] == 255
         assert fields["sThumbLY"] == 32767
@@ -328,8 +318,8 @@ class MergeInputsTests(unittest.TestCase):
         assert out["wButtons"] == 0x1000 | 0x2000
         assert out["bLeftTrigger"] == 255
         assert out["bRightTrigger"] == 200
-        assert out["sThumbLX"] == -1000            # 手柄非零优先
-        assert out["sThumbLY"] == 32767            # 手柄为零回退键盘
+        assert out["sThumbLX"] == -1000
+        assert out["sThumbLY"] == 32767
 
     def test_merge_none_sides(self):
         only_kb = merge_inputs({"wButtons": 0x1000, **{k: 0 for k in
@@ -350,22 +340,22 @@ class VirtualPadTests(unittest.TestCase):
         pad = self._pad()
         pad.start()
         pad._on_notification(195, 78, 1)
-        pad._on_notification(0, 0, 1)              # 高频派发逐条保留
+        pad._on_notification(0, 0, 1)
         pending = pad.drain_feedback()
         assert [fb[0] for fb in pending] == [195, 0]
-        assert pad.drain_feedback() == []          # 取走即清空
+        assert pad.drain_feedback() == []
 
     def test_poll_keyboard_updates_virtual_pad(self):
         pad = self._pad()
         pad.start()
-        pad._pressed = lambda: {0x20, 0x57}        # A 键 + 左摇杆上
+        pad._pressed = lambda: {0x20, 0x57}
         assert pad.poll() is True
         report = pad.client.updates[-1]
         assert report["wButtons"] == 0x1000
         assert report["sThumbLY"] == 32767
-        assert pad.poll() is False                 # 状态未变不重发
+        assert pad.poll() is False
         pad._pressed = lambda: set()
-        assert pad.poll() is True                  # 松键归零
+        assert pad.poll() is True
         assert pad.client.updates[-1]["wButtons"] == 0
 
     def test_poll_disabled_keyboard_sends_nothing(self):
@@ -381,8 +371,8 @@ class VirtualPadTests(unittest.TestCase):
                                     "sThumbRY": 0}})
         pad = self._pad(reader=reader, forward=True)
         pad.start()
-        pad.xinput_index = 1                       # 虚拟手柄在 1 号位
-        pad._pressed = lambda: {0x20}              # 键盘按住 A
+        pad.xinput_index = 1
+        pad._pressed = lambda: {0x20}
         assert pad.poll() is True
         report = pad.client.updates[-1]
         assert report["wButtons"] == 0x1000 | 0x2000
@@ -409,22 +399,21 @@ class VirtualPadTests(unittest.TestCase):
         pad.start()
         assert pad.probe_xinput_index(timeout=0.2) == 2
         assert pad.xinput_index == 2
-        assert pad.client.updates[0]["wButtons"] == 0x0003   # 探测标记
-        assert pad.client.updates[-1]["wButtons"] == 0       # 探测后归零
+        assert pad.client.updates[0]["wButtons"] == 0x0003
+        assert pad.client.updates[-1]["wButtons"] == 0
 
     def test_send_vibration_uses_motor_scale(self):
         reader = FakePadReader()
         pad = self._pad(reader=reader)
         pad.start()
         pad.xinput_index = 1
-        assert pad.send_vibration(194, 78)          # 马达单位 0-255
+        assert pad.send_vibration(194, 78)
         assert reader.vibrations == [(1, 194 * 257, 78 * 257)]
 
     def test_stop_zeroes_input(self):
         pad = self._pad()
         pad.start()
         pad.stop()
-        # 注入的客户端不归 VirtualPad 所有（不关闭），仅把输入归零后摘除
         assert not pad.client.closed
         assert pad.client.updates[-1]["wButtons"] == 0
 
@@ -462,7 +451,6 @@ class BridgeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             await bridge.start()
             try:
                 assert bridge.pad is not None
-                # 模拟游戏派发震动：77/255 ≈ 30% 马达强度
                 bridge.pad.client.emit_feedback(77, 0, 1)
                 for _ in range(50):
                     if bridge._api.calls:
@@ -517,8 +505,6 @@ class BridgeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         try:
             await bridge.inject_test(60, seconds=0.12)
             strengths = [c[2] for c in bridge._api.calls if c[0] == "strength"]
-            # 首个派发即注入目标值；结束后的回落中间值（<60）属正确的包络
-            # 回落行为，不作强断言
             assert strengths and strengths[0] == 60
             assert max(strengths) == 60
         finally:

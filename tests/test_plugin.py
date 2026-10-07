@@ -1,4 +1,3 @@
-"""插件层测试：META 字面量、配置声明一致性、模块类协议与按键动作。"""
 from __future__ import annotations
 
 import ast
@@ -10,7 +9,6 @@ from unittest import IsolatedAsyncioTestCase
 
 
 def _noop_coro():
-    """占位协程（桩方法返回值，调用方可能 close 它）。"""
     async def _noop():
         pass
     return _noop()
@@ -29,7 +27,6 @@ PLUGIN_PY = os.path.join(HERE, "modules", "xinput_oscillate", "plugin.py")
 
 class MetaLiteralTests(unittest.TestCase):
     def test_meta_is_pure_literal(self):
-        """宿主以 AST 不执行代码读取 META——必须是纯字面量字典。"""
         with open(PLUGIN_PY, "r", encoding="utf-8") as f:
             tree = ast.parse(f.read())
         metas = [node for node in tree.body
@@ -42,17 +39,13 @@ class MetaLiteralTests(unittest.TestCase):
         assert value["settings_key"] == "xinput"
         assert isinstance(value["config"], dict)
         assert isinstance(value["params"], dict)
-        # 架构契约：不携带游戏模组、不做游戏注入，数据仅来自
-        # 虚拟手柄的震动反馈（游戏原生震动派发通道）
         assert "mods" not in value
         assert not any(k.startswith("host") or k.startswith("port")
                        for k in value["config"])
-        # 纯输入设计：无输出映射表、无可读参数声明
         assert "outputs" not in value["config"]
         assert "reads" not in value
 
     def test_config_decl_matches_bridge_defaults(self):
-        """META["config"] 与 bridge.DEFAULTS 键集合一致、数值类型一致。"""
         declared = spec_defaults(plugin_mod.META["config"])
         assert set(declared) == set(DEFAULTS), (set(declared) ^ set(DEFAULTS))
         for key, default in DEFAULTS.items():
@@ -111,7 +104,6 @@ class _LogCtx:
 
 
 class ModuleLifecycleTests(IsolatedAsyncioTestCase):
-    """模块级装配冒烟：start → reload_config → stop（宿主 ModuleContext 桩）。"""
 
     async def test_start_reload_stop(self):
         from modules.xinput_oscillate.plugin import _CONFIG_DEFAULTS
@@ -120,7 +112,6 @@ class ModuleLifecycleTests(IsolatedAsyncioTestCase):
             def __init__(self):
                 self.logs: list[str] = []
                 self.settings = dict(_CONFIG_DEFAULTS)
-                # 密闭测试：禁用虚拟手柄（不依赖 ViGEmBus / 不产生系统副作用）
                 self.settings["vigem_enabled"] = False
 
             def log(self, msg):
@@ -166,7 +157,6 @@ class ModuleLifecycleTests(IsolatedAsyncioTestCase):
             await module.start()
             assert module.is_running()
             assert module.bridge is not None
-            # 热更新映射表：不重启桥
             module.ctx.settings["mappings"] = [
                 {"param": "in_ovc_strength_a", "expr": "{xvib_max}"}]
             await module.reload_config()

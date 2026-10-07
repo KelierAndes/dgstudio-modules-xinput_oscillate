@@ -1,17 +1,3 @@
-"""虚拟手柄：键盘映射 / 实体手柄透传 / 游戏震动反馈接收。
-
-围绕 :class:`vigem.ViGemClient` 组合三件事：
-
-* **键盘 → 虚拟手柄**：``KeyMap`` 把可配置的键盘键位（VK）合成为
-  XUSB 手柄状态，无实体手柄也能驱动游戏（调试场景）；
-* **实体手柄透传**（可选）：读取实体 XInput 手柄状态合并进虚拟手柄——
-  游戏改为使用虚拟手柄后，其原生震动派发才会回流到反馈通道；
-* **震动反馈**：游戏对虚拟手柄的 ``XInputSetState`` 由 ViGEm 回调
-  （驱动工作线程）通知，本层做线程安全暂存，引擎循环按拍取走。
-
-虚拟手柄的 XInput 序号用「十字键上+下同时按」探测——真实手柄物理上
-无法同按这两个方向，按此标记轮询 XInput 即可无歧义定位。
-"""
 
 from __future__ import annotations
 
@@ -30,9 +16,8 @@ __all__ = ["KeyMap", "DEFAULT_KEYBOARD_MAP", "merge_inputs", "RealPadReader",
 TRIGGER_MAX = 255
 STICK_MAX = 32767
 
-MARKER_BUTTONS = 0x0003            # dpad_up | dpad_down（探测标记）
+MARKER_BUTTONS = 0x0003
 
-# 键盘键名 → Windows VK 码（其余支持 "0x…" 十六进制与单字符）
 _VK_NAMES = {
     "space": 0x20, "enter": 0x0D, "return": 0x0D, "tab": 0x09,
     "esc": 0x1B, "escape": 0x1B, "backspace": 0x08, "up": 0x26,
@@ -60,7 +45,6 @@ DEFAULT_KEYBOARD_MAP = {
     "rs_up": "I", "rs_down": "K", "rs_left": "J", "rs_right": "L",
 }
 
-# 键盘方向槽位 → (轴字段, 方向)
 _STICK_SLOTS = {
     "ls_up": ("sThumbLY", STICK_MAX), "ls_down": ("sThumbLY", -STICK_MAX),
     "ls_left": ("sThumbLX", -STICK_MAX), "ls_right": ("sThumbLX", STICK_MAX),
@@ -73,7 +57,6 @@ _EMPTY_FIELDS = {"wButtons": 0, "bLeftTrigger": 0, "bRightTrigger": 0,
 
 
 def parse_vk(name: str) -> int | None:
-    """键盘键名 → VK 码；支持 0x 十六进制、单字符与常用键名；非法返回 None。"""
     text = str(name or "").strip()
     if not text:
         return None
@@ -93,7 +76,6 @@ def parse_vk(name: str) -> int | None:
 
 
 class KeyMap:
-    """键位表：虚拟手柄槽位名 → 键盘 VK（纯逻辑，可独立单测）。"""
 
     def __init__(self, mapping: dict | None = None):
         merged = dict(DEFAULT_KEYBOARD_MAP)
@@ -115,7 +97,6 @@ class KeyMap:
         return sorted(self.table)
 
     def apply(self, pressed: set[int]) -> dict:
-        """按下的 VK 集合 → XUSB 状态字段。"""
         fields = dict(_EMPTY_FIELDS)
         for slot, vk in self.table.items():
             if vk not in pressed:
@@ -134,8 +115,6 @@ class KeyMap:
 
 
 def merge_inputs(keyboard: dict | None, pad: dict | None) -> dict:
-    """键盘字段与实体手柄字段合并：按钮取并集、扳机取较大值、
-    摇杆轴手柄非零优先。"""
     kb = keyboard or dict(_EMPTY_FIELDS)
     real = pad or dict(_EMPTY_FIELDS)
     out = dict(_EMPTY_FIELDS)
@@ -148,7 +127,6 @@ def merge_inputs(keyboard: dict | None, pad: dict | None) -> dict:
 
 
 class RealPadReader:
-    """ctypes 直读 XInput（轮询输入 / 回环测试用，不依赖任何 pip 包）。"""
 
     def __init__(self, dll_names: tuple[str, ...] = ("xinput1_4",
                                                      "xinput1_3",
@@ -166,12 +144,11 @@ class RealPadReader:
         return self._dll is not None
 
     def read(self, index: int) -> dict | None:
-        """手柄状态字段；未连接返回 None。"""
         if self._dll is None:
             return None
         state = _XInputState()
         rc = self._dll.XInputGetState(index, ctypes.byref(state))
-        if rc != 0:                       # ERROR_SUCCESS
+        if rc != 0:
             return None
         pad = state.pad
         return {"wButtons": pad.wButtons, "bLeftTrigger": pad.bLeftTrigger,
@@ -180,7 +157,6 @@ class RealPadReader:
                 "sThumbRY": pad.sThumbRY}
 
     def set_vibration(self, index: int, left: int, right: int) -> bool:
-        """XInputSetState（回环测试：对虚拟手柄派发震动）。"""
         if self._dll is None or not hasattr(self._dll, "XInputSetState"):
             return False
         vib = _XInputVibration(min(65535, max(0, int(left))),
@@ -207,7 +183,6 @@ class _XInputVibration(ctypes.Structure):
 
 
 class VirtualPad:
-    """虚拟 Xbox 360 手柄：键盘 + 实体手柄 → 输入合成；震动反馈暂存。"""
 
     def __init__(self, keymap: KeyMap, *, keyboard_enabled: bool = True,
                  forward_pad: bool = False,
@@ -223,9 +198,8 @@ class VirtualPad:
         self._feedback: collections.deque = collections.deque(maxlen=64)
         self._last_fields: dict | None = None
         self._real_idx: int | None = None
-        self.xinput_index: int | None = None   # 探测后填入
+        self.xinput_index: int | None = None
 
-    # ---- 生命周期 ---------------------------------------------------------
     def start(self) -> None:
         self.client.connect()
         self.client.add_x360()
@@ -234,28 +208,23 @@ class VirtualPad:
     def stop(self) -> None:
         try:
             if self.client.attached():
-                self.client.update(XUSBReport())   # 输入归零再摘除
+                self.client.update(XUSBReport())
         except Exception:
             pass
         if self._own_client:
             self.client.close()
 
-    # ---- 震动反馈（ViGEm 工作线程 → 引擎循环） ----------------------------
     def _on_notification(self, large: int, small: int, led: int) -> None:
-        """回调线程只做入队（高频派发逐条保留，不丢中间值）。"""
         with self._lock:
             self._feedback.append((large, small, time.perf_counter()))
 
     def drain_feedback(self) -> list[tuple[int, int, float]]:
-        """取走全部暂存反馈 ``(LargeMotor, SmallMotor, 时刻)``，按到达序。"""
         with self._lock:
             pending = list(self._feedback)
             self._feedback.clear()
         return pending
 
-    # ---- 输入合成 -----------------------------------------------------------
     def poll(self) -> bool:
-        """采样键盘与实体手柄，状态有变化时更新虚拟手柄。返回是否更新。"""
         fields = None
         if self.keyboard_enabled:
             pressed = {vk for vk in self.keymap.table.values()
@@ -275,7 +244,6 @@ class VirtualPad:
         return True
 
     def _pressed(self) -> set[int]:
-        """当前按下的键盘 VK 集合（GetAsyncKeyState）。"""
         out = set()
         for vk in self.keymap.table.values():
             if ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000:
@@ -283,7 +251,6 @@ class VirtualPad:
         return out
 
     def _real_index(self) -> int | None:
-        """实体手柄的 XInput 序号（排除虚拟手柄自身；断开时重探）。"""
         if self._real_idx is not None:
             if self.pad_reader.read(self._real_idx) is not None:
                 return self._real_idx
@@ -298,9 +265,7 @@ class VirtualPad:
                 return index
         return None
 
-    # ---- XInput 序号探测 ----------------------------------------------------
     def probe_xinput_index(self, timeout: float = 1.0) -> int | None:
-        """用「十字键上+下」标记探测虚拟手柄占用的 XInput 序号。"""
         if self.xinput_index is not None:
             return self.xinput_index
         if not self.pad_reader.available:
@@ -329,7 +294,6 @@ class VirtualPad:
         return found
 
     def send_vibration(self, left: int, right: int) -> bool:
-        """对虚拟手柄按 XInput 原生通道派发震动（回环测试）。"""
         index = self.xinput_index
         if index is None:
             return False

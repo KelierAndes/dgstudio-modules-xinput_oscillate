@@ -14,3 +14,6 @@ modules/*.old/
 # ===== zig/cl 构建副产物（构建脚本会重新生成）=====
 bridge/dist/*.lib
 bridge/dist/*.exp
+
+# ===== 开发文档（仅本地维护，不随仓库分发）=====
+DEVELOPMENT.md

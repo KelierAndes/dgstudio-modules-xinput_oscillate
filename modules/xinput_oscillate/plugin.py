@@ -1,22 +1,3 @@
-"""XInput 手柄震动联动模块：虚拟手柄接收游戏原生震动派发 → 核心参数映射。
-
-不注入游戏：模块经 ViGEm 创建一只虚拟 Xbox 360 手柄，游戏照常通过
-自己的 XInput 通道把震动派发给它（无手柄时游戏本就没有震动数据来源）；
-派发结果由虚拟手柄的**震动反馈通道**回流，左右马达 0-255 经包络平滑成
-参数（``xvib_l`` / ``xvib_r`` / ``xvib_max`` / ``xvib_active`` /
-``xvib_link``，``xvib_pad`` 表示虚拟手柄就绪），联动页输入映射表把它们
-组合后驱动郊狼/负鼠（如 负鼠通道 A 强度 ← ``{xvib_max}``）。
-
-* **键盘映射**：键盘键位 → 虚拟手柄按键/摇杆，无实体手柄也能驱动游戏
-  与验证震动联动（调试场景，键位表可配置）；
-* **实体手柄透传**（可选）：把实体手柄输入合并进虚拟手柄，游戏改用
-  虚拟手柄后震动可观测。
-
-映射关系只落在一张输入映射表上（核心参数名固定不可改），META["config"] 声明全部配置项，宿主自动装载 config/xinput.json，
-联动页据此渲染映射表与模块设置。为安全起见默认映射表为空——不装任何
-映射就不会驱动任何设备。ViGEmBus 驱动需用户自行安装（模块启动时探测
-并降级），ViGEmClient.dll 随模块 bin/ 分发（官方 MIT 实现）。
-"""
 
 META = {
     "id": "xinput_oscillate",
@@ -27,7 +8,6 @@ META = {
                    "（无手柄调试）、实体手柄透传与回环自测。",
     "settings_key": "xinput",
     "actions": ["xinput_test", "xinput_loopback"],
-    # 模块自定义参数：震动包络与状态，输入表达式以 {名称} 引用
     "params": {
         "xvib_l": {"label": "左马达震动", "desc": "XInput 左马达包络强度 0-100"},
         "xvib_r": {"label": "右马达震动", "desc": "XInput 右马达包络强度 0-100"},
@@ -37,7 +17,6 @@ META = {
         "xvib_pad": {"label": "虚拟手柄就绪", "desc": "虚拟手柄已接入（游戏可见手柄）为 1"},
     },
     "config": {
-        # ---- 虚拟手柄 ----
         "vigem_enabled": {
             "label": "创建虚拟手柄", "type": "bool", "default": True,
             "group": "pad", "desc": "经 ViGEmBus 建虚拟 Xbox 360 手柄接收游戏震动派发；"
@@ -70,7 +49,6 @@ META = {
                     "槽位：a/b/x/y、lb/rb、lt/rt、back/start、ls_click/rs_click、"
                     "dpad_*、ls_up/down/left/right、rs_*",
         },
-        # ---- 包络整形 ----
         "gain": {
             "label": "强度增益", "type": "float", "default": 1.0,
             "min": 0.1, "max": 3.0, "step": 0.05, "unit": "×",
@@ -102,7 +80,6 @@ META = {
             "min": 0.1, "max": 5.0, "step": 0.1, "unit": "s",
             "group": "settings", "desc": "设备状态变量参与表达式运算时的重算节流",
         },
-        # ---- 输入映射表（纯输入联动：模块只读震动、只写设备，无输出表） ----
         "mappings": {
             "label": "输入映射表", "type": "list", "default": [],
             "group": "map", "rows": "in",
@@ -117,7 +94,6 @@ from plugins import ButtonAction, ModuleBase, spec_defaults
 
 from modules.xinput_oscillate.bridge import BridgeConfig, XInputBridge
 
-# 配置缺省值唯一来源 = META["config"] 声明，BridgeConfig.DEFAULTS 仅做兜底
 _CONFIG_DEFAULTS = spec_defaults(META["config"])
 
 
@@ -136,13 +112,12 @@ class XInputOscillateModule(ModuleBase):
         return META["config"]
 
     def link_params(self) -> list[tuple[str, str]]:
-        """模块可写参数表（震动包络与状态，输入表达式变量池）。"""
         return [(name, str(item.get("label") or name))
                 for name, item in META["params"].items()]
 
     def on_load(self, ctx) -> None:
         self.ctx = ctx
-        ctx.settings.pop("outputs", None)   # 0.2.0 遗留：输出表已取消
+        ctx.settings.pop("outputs", None)
 
     def on_unload(self) -> None:
         self.bridge = None
@@ -158,7 +133,6 @@ class XInputOscillateModule(ModuleBase):
         await self.bridge.start()
 
     async def reload_config(self) -> None:
-        """设置变更后把映射表与包络参数热载进运行中的桥（虚拟手柄开关除外）。"""
         if self.bridge is None:
             return
         for key, default in _CONFIG_DEFAULTS.items():
@@ -187,7 +161,6 @@ class XInputOscillateModule(ModuleBase):
         return self.bridge is not None and self.bridge.is_running()
 
     def button_actions(self) -> list:
-        """负鼠按键动作：合成测试脉冲（链路自测）与虚拟手柄回环测试。"""
         return [
             ButtonAction(
                 key="xinput_test",
