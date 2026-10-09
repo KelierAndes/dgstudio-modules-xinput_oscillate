@@ -5,16 +5,12 @@ import asyncio
 import copy
 import time
 
-from dglab.mapping import MappingEngine, signal_specs
-from dglab.params import (build_dispatchers, core_alias_values, core_inputs,
-                          device_state_values)
-
 from modules.xinput_oscillate import vigem
 from modules.xinput_oscillate.vigem import MOTOR_SCALE
 from modules.xinput_oscillate.virtualpad import KeyMap, VirtualPad
 
-__all__ = ["BridgeConfig", "RumbleMixer", "XInputBridge", "MOTOR_MAX",
-           "PARAM_KEYS"]
+__all__ = ["BridgeConfig", "RumbleMixer", "SignalBoard", "XInputBridge",
+           "MOTOR_MAX", "PARAM_KEYS"]
 
 MOTOR_MAX = 65535
 
@@ -30,8 +26,6 @@ DEFAULTS = {
     "active_pct": 15.0,
     "release_ms": 300,
     "idle_ms": 1000,
-    "refresh_s": 0.5,
-    "mappings": [],
 }
 
 
@@ -41,6 +35,44 @@ def _num(value, default: float) -> float:
     except (TypeError, ValueError):
         return default
     return out if out == out else default
+
+
+def _as_number(value) -> float | None:
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+class SignalBoard:
+    """模块只登记变量：实时值落在 signals，设备动作由事件流的写入卡片驱动。
+
+    核心按 ``inst.bridge.engine`` 取 ``signals`` / ``errors`` 渲染变量表与实时值，
+    并会对引擎调用 ``pump()``——本模块没有表达式表，pump 是空实现，签名保留。
+    """
+
+    def __init__(self) -> None:
+        self.signals: dict[str, float] = {}
+        self.errors: dict[str, str] = {}
+
+    def signal(self, name: str, value) -> None:
+        num = _as_number(value)
+        if num is None or self.signals.get(name) == num:
+            return
+        self.signals[name] = num
+
+    def pump(self) -> None:
+        return None
+
+    def reset(self) -> None:
+        self.signals.clear()
+        self.errors.clear()
 
 
 class BridgeConfig(dict):
@@ -130,74 +162,25 @@ class XInputBridge:
         self.config = config
         self.ctx = ctx
         self.mixer = RumbleMixer(config)
-        self.engine = MappingEngine(self._dispatch,
-                                    device_vars=self.device_vars)
-        self.engine.set_ranges(signal_specs())
-        self._api = self._DeviceApi(self)
-        self.actions = build_dispatchers(self._api, core_inputs())
+        self.engine = SignalBoard()
         self._pad_factory = pad_factory or _default_pad_factory
 
         self.pad: VirtualPad | None = None
-        self._tasks: set[asyncio.Task] = set()
         self._tick_task: asyncio.Task | None = None
         self._inputs_task: asyncio.Task | None = None
-        self._pump_task: asyncio.Task | None = None
         self._running = False
-        self._primed = False
         self._last_fed: dict[str, float] = {}
         self._link_seen: bool | None = None
         self.rx_count = 0
         self.last_rx: float | None = None
 
-    class _DeviceApi:
-
-        def __init__(self, bridge: "XInputBridge"):
-            self._bridge = bridge
-
-        @property
-        def _ctx(self):
-            return self._bridge.ctx
-
-        def resolve_slot(self, family: str = "") -> str | None:
-            return self._ctx.resolve_slot(
-                family=str(family or "COYOTE").upper(), output_only=True)
-
-        def wave_order(self, family: str = "") -> list[str]:
-            return self._ctx.wave_order(str(family or "COYOTE").upper())
-
-        def wave_selection(self) -> dict:
-            return self._ctx.wave_selection() or {}
-
-        def set_strength(self, channel, value, slot_id=None):
-            return self._ctx.set_strength(channel, value, slot_id=slot_id)
-
-        def set_wave(self, channel, name, slot_id=None):
-            return self._ctx.set_wave(channel, name, slot_id=slot_id)
-
-        def zap(self, channel, seconds=1.0, slot_id=None):
-            return self._ctx.zap(channel, seconds, slot_id=slot_id)
-
-        def fire_start(self, slot_id=None, channel=None):
-            return self._ctx.fire_start(slot_id=slot_id, channel=channel)
-
-        def fire_stop(self, slot_id=None, channel=None):
-            return self._ctx.fire_stop(slot_id=slot_id, channel=channel)
-
-        def emergency_stop(self):
-            return self._ctx.emergency_stop()
-
-        def run(self, coro) -> None:
-            self._bridge._spawn(coro)
-
     async def start(self) -> None:
         if self._running:
             return
         self._running = True
-        self.apply_config()
         await self._start_pad()
         self._tick_task = asyncio.ensure_future(self._tick_loop())
         self._inputs_task = asyncio.ensure_future(self._inputs_loop())
-        self._pump_task = asyncio.ensure_future(self._pump_loop())
         self.ctx.log("震动桥已启动" + ("，虚拟手柄就绪" if self.pad else
                      "（无虚拟手柄，仅测试注入可用）"))
 
@@ -229,10 +212,10 @@ class XInputBridge:
 
     async def stop(self) -> None:
         self._running = False
-        for task in (self._tick_task, self._inputs_task, self._pump_task):
+        for task in (self._tick_task, self._inputs_task):
             if task is not None:
                 task.cancel()
-        self._tick_task = self._inputs_task = self._pump_task = None
+        self._tick_task = self._inputs_task = None
         pad, self.pad = self.pad, None
         if pad is not None:
             try:
@@ -247,15 +230,6 @@ class XInputBridge:
 
     def is_running(self) -> bool:
         return self._running
-
-    def apply_config(self) -> None:
-        first = not self._primed
-        if first:
-            self.engine.armed = False
-        self.engine.set_mappings(self.config.get("mappings") or [])
-        if first:
-            self.engine.armed = True
-            self._primed = True
 
     def _consume_feedback(self) -> None:
         pad = self.pad
@@ -301,15 +275,6 @@ class XInputBridge:
         except asyncio.CancelledError:
             pass
 
-    async def _pump_loop(self) -> None:
-        try:
-            while self._running:
-                interval = max(0.05, _num(self.config.get("refresh_s"), 0.5))
-                await asyncio.sleep(interval)
-                self.engine.pump()
-        except asyncio.CancelledError:
-            pass
-
     async def inject_test(self, pct: float, seconds: float = 0.8) -> None:
         pct = min(100.0, max(1.0, float(pct or 60)))
         raw = pct / 100.0 * MOTOR_MAX
@@ -339,30 +304,3 @@ class XInputBridge:
         pad.send_vibration(0, 0)
         self.ctx.log(f"回环测试完成（XInput 序号 {pad.xinput_index}，"
                      f"{pct:.0f}%；反馈经游戏原生震动通道回流）")
-
-    def device_vars(self) -> dict[str, float]:
-        try:
-            state = self.ctx.get_state()
-        except Exception:
-            return {}
-        vals = device_state_values(state)
-        vals.update(core_alias_values(vals))
-        return vals
-
-    def _dispatch(self, target: str, value: int) -> None:
-        action = self.actions.get(target)
-        if action is None:
-            return
-        try:
-            action(value)
-        except Exception as exc:
-            self.ctx.log(f"映射派发 {target}={value} 失败: {exc!r}")
-
-    def _spawn(self, coro) -> None:
-        try:
-            task = asyncio.ensure_future(coro)
-        except RuntimeError:
-            coro.close()
-            return
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)

@@ -9,71 +9,40 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _bootstrap  # noqa: F401  定位 DGStudio 核心仓库
 
-from dglab.params import build_dispatchers, core_inputs
-
 from modules.xinput_oscillate import vigem
 from modules.xinput_oscillate.bridge import (MOTOR_MAX, BridgeConfig,
-                                             RumbleMixer, XInputBridge)
+                                             RumbleMixer, SignalBoard,
+                                             XInputBridge)
 from modules.xinput_oscillate.virtualpad import (DEFAULT_KEYBOARD_MAP,
                                                  KeyMap, VirtualPad,
                                                  merge_inputs, parse_vk)
 
-
-class _Noop:
-    async def coro(self):
-        pass
-
-
-def _noop_coro():
-    return _Noop().coro()
+BLOCKED_DEVICE_METHODS = ("set_strength", "add_strength", "reset_strength",
+                          "set_wave", "push_pulse_stream", "fire",
+                          "fire_start", "fire_stop", "zap",
+                          "set_intensity_param")
 
 
-class RecordingApi:
+class DeviceWrite(Exception):
+    """桩上下文抛出它：模块一旦直写设备，测试立刻失败。"""
 
-    def __init__(self):
-        self.calls: list[tuple] = []
 
-    def resolve_slot(self, family: str = "") -> str | None:
-        return f"slot-{family or 'COYOTE'}".lower()
+def _deny(name: str):
 
-    def wave_order(self, family: str = "") -> list[str]:
-        return ["静默", "持续", "波浪"]
-
-    def wave_selection(self) -> dict:
-        return {"A": "静默", "B": "静默"}
-
-    def set_strength(self, channel, value, slot_id=None):
-        self.calls.append(("strength", channel, value, slot_id))
-        return _noop_coro()
-
-    def set_wave(self, channel, name, slot_id=None):
-        self.calls.append(("wave", channel, name, slot_id))
-        return _noop_coro()
-
-    def zap(self, channel, seconds=1.0, slot_id=None):
-        self.calls.append(("zap", channel, seconds, slot_id))
-        return _noop_coro()
-
-    def fire_start(self, slot_id=None, channel=None):
-        self.calls.append(("fire_start", slot_id, channel))
-        return _noop_coro()
-
-    def fire_stop(self, slot_id=None, channel=None):
-        self.calls.append(("fire_stop", slot_id, channel))
-        return _noop_coro()
-
-    def emergency_stop(self):
-        self.calls.append(("emergency",))
-        return _noop_coro()
-
-    def run(self, coro) -> None:
-        coro.close()
+    def deny(self, *args, **kwargs):
+        raise DeviceWrite(f"模块不得直写设备：{name}()")
+    return deny
 
 
 class FakeCtx:
+    """ModuleContext 桩：放行读状态 / 登记变量，拦截全部设备直写。"""
+
+    logs: list[str]
 
     def __init__(self):
         self.logs: list[str] = []
+        self.settings: dict = {}
+        self.emergency_calls = 0
 
     def log(self, msg: str) -> None:
         self.logs.append(str(msg))
@@ -87,26 +56,25 @@ class FakeCtx:
     def wave_selection(self):
         return {}
 
-    def set_strength(self, channel, value, slot_id=None):
-        return _noop_coro()
-
-    def set_wave(self, channel, name, slot_id=None):
-        return _noop_coro()
-
-    def zap(self, channel, seconds=1.0, slot_id=None):
-        return _noop_coro()
-
-    def fire_start(self, slot_id=None, channel=None):
-        return _noop_coro()
-
-    def fire_stop(self, slot_id=None, channel=None):
-        return _noop_coro()
-
-    def emergency_stop(self):
-        return _noop_coro()
-
     def get_state(self):
         return None
+
+    def emergency_stop(self):
+        self.emergency_calls += 1
+
+    def submit(self, coro):
+        coro.close()
+
+    set_strength = _deny("set_strength")
+    add_strength = _deny("add_strength")
+    reset_strength = _deny("reset_strength")
+    set_wave = _deny("set_wave")
+    push_pulse_stream = _deny("push_pulse_stream")
+    fire = _deny("fire")
+    fire_start = _deny("fire_start")
+    fire_stop = _deny("fire_stop")
+    zap = _deny("zap")
+    set_intensity_param = _deny("set_intensity_param")
 
 
 class FakeClient:
@@ -231,26 +199,23 @@ class RumbleMixerTests(unittest.TestCase):
 
 class FeedbackTests(unittest.TestCase):
 
-    def _bridge(self, mappings: list[dict], **overrides) -> XInputBridge:
-        cfg = BridgeConfig({"mappings": mappings,
-                            "vigem_enabled": False, **overrides})
-        bridge = XInputBridge(cfg, FakeCtx(),
-                              pad_factory=lambda cfg: None)
-        bridge._api = RecordingApi()
-        bridge.actions = build_dispatchers(bridge._api, core_inputs())
-        bridge.apply_config()
-        return bridge
+    def _bridge(self, **overrides) -> XInputBridge:
+        cfg = BridgeConfig({"vigem_enabled": False, **overrides})
+        return XInputBridge(cfg, FakeCtx(), pad_factory=lambda cfg: None)
 
-    def test_motor_scale_to_mapping(self):
-        bridge = self._bridge([{"param": "in_ovc_strength_a",
-                                "expr": "{xvib_max}"}])
-        bridge._on_feedback(195, 78, time.monotonic())
-        strengths = [c for c in bridge._api.calls if c[0] == "strength"]
-        assert strengths and strengths[-1][2] == 76
+    def test_feedback_publishes_envelope_signals(self):
+        bridge = self._bridge()
+        bridge._on_feedback(195, 78, now=0.0)
+        sig = bridge.engine.signals
+        assert sig["xvib_l"] == 76.5
+        assert sig["xvib_r"] == 30.6
+        assert sig["xvib_max"] == 76.5
+        assert sig["xvib_active"] == 1.0
+        assert sig["xvib_link"] == 1.0
+        assert bridge.rx_count == 1
 
     def test_zero_feedback_decays_but_keeps_state(self):
-        bridge = self._bridge([{"param": "in_ovc_strength_a",
-                                "expr": "{xvib_max}"}])
+        bridge = self._bridge()
         bridge._on_feedback(255, 255, now=0.0)
         assert bridge.rx_count == 1
         bridge._on_feedback(0, 0, now=0.1)
@@ -258,19 +223,32 @@ class FeedbackTests(unittest.TestCase):
         vals = bridge.mixer.tick(0.2)
         assert vals["xvib_l"] < 100.0
 
-    def test_dispatch_paths_via_feedback(self):
-        bridge = self._bridge([
-            {"param": "in_ovc_zap_a", "expr": "{xvib_active}"},
-            {"param": "in_ovc_fire", "expr": "{xvib_active}"},
-            {"param": "in_emergency", "expr": "{xvib_link}"},
-        ])
-        now = time.monotonic()
-        bridge._on_feedback(255, 0, now)
-        kinds = [c[0] for c in bridge._api.calls]
-        assert "zap" in kinds and "fire_start" in kinds and "emergency" in kinds
-        bridge._on_feedback(0, 0, now + 0.1)
-        bridge._feed(bridge.mixer.tick(now + 0.5))
-        assert ("fire_stop", "slot-ovc", None) in bridge._api.calls
+    def test_link_loss_publishes_without_touching_devices(self):
+        bridge = self._bridge(idle_ms=200, release_ms=100)
+        bridge._on_feedback(255, 0, now=0.0)
+        assert bridge.engine.signals["xvib_link"] == 1.0
+        bridge._feed(bridge.mixer.tick(1.0))
+        assert bridge.engine.signals["xvib_link"] == 0.0
+        assert bridge.engine.signals["xvib_l"] == 0.0
+        assert any("链路" in m for m in bridge.ctx.logs)
+
+    def test_engine_is_signal_board_only(self):
+        bridge = self._bridge()
+        assert isinstance(bridge.engine, SignalBoard)
+        assert isinstance(bridge.engine.signals, dict)
+        assert isinstance(bridge.engine.errors, dict)
+        bridge.engine.signal("xvib_l", 42)
+        assert bridge.engine.signals["xvib_l"] == 42.0
+        bridge.engine.signal("xvib_l", 42)
+        bridge.engine.pump()
+        bridge.engine.reset()
+        assert bridge.engine.signals == {}
+
+    def test_bridge_has_no_device_dispatch_surface(self):
+        bridge = self._bridge()
+        for attr in ("actions", "dispatchers", "_dispatch", "device_vars",
+                     "_api"):
+            assert not hasattr(bridge, attr), attr
 
 
 class KeyMapTests(unittest.TestCase):
@@ -429,7 +407,7 @@ def _fake_pad(config=None, **kwargs) -> VirtualPad:
 
 class BridgeLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_start_without_pad_degrades(self):
-        cfg = BridgeConfig({"vigem_enabled": False, "mappings": []})
+        cfg = BridgeConfig({"vigem_enabled": False})
         bridge = XInputBridge(cfg, FakeCtx(), pad_factory=lambda cfg: None)
         await bridge.start()
         try:
@@ -438,31 +416,30 @@ class BridgeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await bridge.stop()
 
-    async def test_feedback_drives_mapping_end_to_end(self):
+    async def test_feedback_publishes_signals_end_to_end(self):
         real_bus = vigem.bus_available
         vigem.bus_available = lambda: True
         try:
-            cfg = BridgeConfig({
-                "mappings": [{"param": "in_ovc_strength_a",
-                              "expr": "{xvib_max}"}]})
-            bridge = XInputBridge(cfg, FakeCtx(), pad_factory=_fake_pad)
-            bridge._api = RecordingApi()
-            bridge.actions = build_dispatchers(bridge._api, core_inputs())
+            cfg = BridgeConfig({"idle_ms": 1000})
+            ctx = FakeCtx()
+            bridge = XInputBridge(cfg, ctx, pad_factory=_fake_pad)
             await bridge.start()
             try:
                 assert bridge.pad is not None
-                bridge.pad.client.emit_feedback(77, 0, 1)
-                for _ in range(50):
-                    if bridge._api.calls:
-                        break
-                    await asyncio.sleep(0.02)
-                strengths = [c for c in bridge._api.calls
-                             if c[0] == "strength"]
-                assert strengths and strengths[-1][2] == 30
                 assert bridge.engine.signals.get("xvib_pad") == 1.0
+                bridge.pad.client.emit_feedback(77, 0, 1)
+                peak = 0.0
+                for _ in range(50):
+                    await asyncio.sleep(0.02)
+                    peak = max(peak, bridge.engine.signals.get("xvib_max", 0.0))
+                    if peak >= 30:
+                        break
+                assert round(peak) == 30, peak
+                assert bridge.rx_count >= 1
             finally:
                 await bridge.stop()
             assert not bridge.is_running()
+            assert bridge.engine.signals == {}
         finally:
             vigem.bus_available = real_bus
 
@@ -494,21 +471,72 @@ class BridgeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await bridge.stop()
 
-    async def test_inject_test_feeds_pipeline(self):
-        mappings = [{"param": "in_ovc_strength_a", "expr": "{xvib_max}"}]
-        bridge = XInputBridge(BridgeConfig({"vigem_enabled": False,
-                                            "mappings": mappings}),
+    async def test_inject_test_feeds_signals(self):
+        bridge = XInputBridge(BridgeConfig({"vigem_enabled": False}),
                               FakeCtx(), pad_factory=lambda cfg: None)
-        bridge._api = RecordingApi()
-        bridge.actions = build_dispatchers(bridge._api, core_inputs())
         await bridge.start()
         try:
-            await bridge.inject_test(60, seconds=0.12)
-            strengths = [c[2] for c in bridge._api.calls if c[0] == "strength"]
-            assert strengths and strengths[0] == 60
-            assert max(strengths) == 60
+            task = asyncio.ensure_future(bridge.inject_test(60, seconds=0.3))
+            peak = 0.0
+            while not task.done():
+                await asyncio.sleep(0.02)
+                peak = max(peak, bridge.engine.signals.get("xvib_max", 0.0))
+            await task
+            assert abs(peak - 60.0) < 0.5, peak
+            assert any("测试震动脉冲" in m for m in bridge.ctx.logs)
         finally:
             await bridge.stop()
+
+    async def test_pad_loopback_never_writes_devices(self):
+        real_bus = vigem.bus_available
+        vigem.bus_available = lambda: True
+        try:
+            bridge = XInputBridge(BridgeConfig(), FakeCtx(),
+                                  pad_factory=_fake_pad)
+            await bridge.start()
+            try:
+                await bridge.pad_loopback(50, seconds=0.1)
+                assert any("回环测试完成" in m for m in bridge.ctx.logs)
+            finally:
+                await bridge.stop()
+        finally:
+            vigem.bus_available = real_bus
+
+
+class NoDeviceWriteGuardTests(unittest.IsolatedAsyncioTestCase):
+    """架构契约：模块只登记变量。桩上下文对任何设备直写都抛错，全程不许被触发。"""
+
+    async def test_full_cycle_survives_blocking_context(self):
+        real_bus = vigem.bus_available
+        vigem.bus_available = lambda: True
+        try:
+            ctx = FakeCtx()
+            bridge = XInputBridge(BridgeConfig({"idle_ms": 120}), ctx,
+                                  pad_factory=_fake_pad)
+            await bridge.start()
+            try:
+                bridge.pad.client.emit_feedback(195, 78, 1)
+                await asyncio.sleep(0.12)
+                await bridge.inject_test(80, seconds=0.12)
+                await bridge.pad_loopback(50, seconds=0.1)
+                bridge._feed(bridge.mixer.tick(time.perf_counter() + 5.0))
+                assert bridge.engine.errors == {}
+                assert set(bridge.engine.signals) >= {"xvib_l", "xvib_r",
+                                                      "xvib_max",
+                                                      "xvib_active",
+                                                      "xvib_link", "xvib_pad"}
+            finally:
+                await bridge.stop()
+        finally:
+            vigem.bus_available = real_bus
+
+    def test_stub_context_blocks_every_forbidden_method(self):
+        ctx = FakeCtx()
+        for name in BLOCKED_DEVICE_METHODS:
+            with self.assertRaises(DeviceWrite):
+                getattr(ctx, name)(channel="A")
+        ctx.emergency_stop()          # 急停是安全通道，仍允许
+        assert ctx.emergency_calls == 1
 
 
 if __name__ == "__main__":

@@ -2,19 +2,26 @@
 META = {
     "id": "xinput_oscillate",
     "name": "手柄震动联动（XInput）",
-    "version": "0.2.1",
+    "version": "0.3.0",
     "description": "经 ViGEm 虚拟手柄接收游戏原生 XInput 震动派发（不注入游戏），"
-                   "震动强度/状态经映射表达式驱动郊狼与负鼠；支持键盘键位映射"
-                   "（无手柄调试）、实体手柄透传与回环自测。",
+                   "把震动强度与状态登记为只读变量；设备动作请在「事件流」页用"
+                   "写入卡片按这些变量编排。支持键盘键位映射（无手柄调试）、"
+                   "实体手柄透传与回环自测。",
     "settings_key": "xinput",
     "actions": ["xinput_test", "xinput_loopback"],
     "params": {
-        "xvib_l": {"label": "左马达震动", "desc": "XInput 左马达包络强度 0-100"},
-        "xvib_r": {"label": "右马达震动", "desc": "XInput 右马达包络强度 0-100"},
-        "xvib_max": {"label": "震动峰值", "desc": "左右马达包络较大值 0-100"},
-        "xvib_active": {"label": "震动激活", "desc": "包络峰值超过激活阈值时为 1，回落后归 0"},
-        "xvib_link": {"label": "震动链路", "desc": "链路超时窗口内收到游戏震动派发为 1，超时为 0"},
-        "xvib_pad": {"label": "虚拟手柄就绪", "desc": "虚拟手柄已接入（游戏可见手柄）为 1"},
+        "xvib_l": {"label": "左马达震动", "type": "Float",
+                   "desc": "XInput 左马达包络强度 0-100"},
+        "xvib_r": {"label": "右马达震动", "type": "Float",
+                   "desc": "XInput 右马达包络强度 0-100"},
+        "xvib_max": {"label": "震动峰值", "type": "Float",
+                     "desc": "左右马达包络较大值 0-100"},
+        "xvib_active": {"label": "震动激活", "type": "Bool",
+                        "desc": "包络峰值超过激活阈值时为 1，回落后归 0"},
+        "xvib_link": {"label": "震动链路", "type": "Bool",
+                      "desc": "链路超时窗口内收到游戏震动派发为 1，超时为 0"},
+        "xvib_pad": {"label": "虚拟手柄就绪", "type": "Bool",
+                     "desc": "虚拟手柄已接入（游戏可见手柄）为 1"},
     },
     "config": {
         "vigem_enabled": {
@@ -75,18 +82,6 @@ META = {
             "group": "settings",
             "desc": "超时未收到游戏震动派发即视为链路断开（{xvib_link} 归 0）",
         },
-        "refresh_s": {
-            "label": "状态重算间隔", "type": "float", "default": 0.5,
-            "min": 0.1, "max": 5.0, "step": 0.1, "unit": "s",
-            "group": "settings", "desc": "设备状态变量参与表达式运算时的重算节流",
-        },
-        "mappings": {
-            "label": "输入映射表", "type": "list", "default": [],
-            "group": "map", "rows": "in",
-            "desc": "行 {param: 核心输入参数, expr: 表达式}，以 {xvib_l}/{xvib_r}/"
-                    "{xvib_max}/{xvib_active} 等组合驱动设备，可混合核心输出参数；"
-                    "默认为空——不配置映射就不会驱动任何设备",
-        },
     },
 }
 
@@ -95,6 +90,31 @@ from plugins import ButtonAction, ModuleBase, spec_defaults
 from modules.xinput_oscillate.bridge import BridgeConfig, XInputBridge
 
 _CONFIG_DEFAULTS = spec_defaults(META["config"])
+
+_LEGACY_TABLE_KEYS = ("mappings", "outputs")
+
+
+def drop_legacy_tables(settings, log=None) -> bool:
+    """清掉映射表时代留在设置里的行：设备动作已迁到「事件流」的写入卡片。"""
+    removed = [key for key in _LEGACY_TABLE_KEYS if key in settings]
+    if not removed:
+        return False
+    for key in removed:
+        settings.pop(key, None)
+    if hasattr(settings, "save"):
+        settings.save()
+    if log is not None:
+        log("已清除旧版映射表设置（" + "、".join(removed) + "）："
+            "本模块只登记震动变量，设备动作请在「事件流」页用写入卡片按这些变量编排")
+    return True
+
+
+def var_rows() -> list[dict]:
+    """META 声明的震动读数 → 变量表登记行（全部只读：模块只发布，不接收写入）。"""
+    return [{"name": name, "label": str(item.get("label") or name),
+             "dir": "in", "type": str(item.get("type") or "Float"),
+             "desc": str(item.get("desc") or "")}
+            for name, item in META["params"].items()]
 
 
 class XInputOscillateModule(ModuleBase):
@@ -111,13 +131,18 @@ class XInputOscillateModule(ModuleBase):
     def config_spec(self) -> dict:
         return META["config"]
 
-    def link_params(self) -> list[tuple[str, str]]:
-        return [(name, str(item.get("label") or name))
-                for name, item in META["params"].items()]
+    def link_params(self) -> list[dict]:
+        return var_rows()
+
+    def temp_specs(self) -> list[dict]:
+        """同一批读数再以 key 形式登记：核心变量表据此判定方向与类型。"""
+        return [{"key": row["name"],
+                 **{k: v for k, v in row.items() if k != "name"}}
+                for row in var_rows()]
 
     def on_load(self, ctx) -> None:
         self.ctx = ctx
-        ctx.settings.pop("outputs", None)
+        drop_legacy_tables(ctx.settings, ctx.log)
 
     def on_unload(self) -> None:
         self.bridge = None
@@ -150,7 +175,7 @@ class XInputOscillateModule(ModuleBase):
             want = self.ctx.settings.get(key, _CONFIG_DEFAULTS[key])
             if bool(self.bridge.config.get(key)) != bool(want):
                 self.ctx.log("虚拟手柄开关已修改，需重新开关模块后生效")
-        self.bridge.apply_config()
+        drop_legacy_tables(self.ctx.settings, self.ctx.log)
 
     async def stop(self) -> None:
         if self.bridge is not None:
