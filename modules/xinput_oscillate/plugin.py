@@ -2,7 +2,7 @@
 META = {
     "id": "xinput_oscillate",
     "name": "手柄震动联动（XInput）",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "description": "经 ViGEm 虚拟手柄接收游戏原生 XInput 震动派发（不注入游戏），"
                    "把震动强度与状态登记为只读变量；设备动作请在「事件流」页用"
                    "写入卡片按这些变量编排。支持键盘键位映射（无手柄调试）、"
