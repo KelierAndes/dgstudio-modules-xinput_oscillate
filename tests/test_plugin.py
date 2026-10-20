@@ -34,7 +34,7 @@ class MetaLiteralTests(unittest.TestCase):
         value = ast.literal_eval(metas[0].value)
         assert value["id"] == "xinput_oscillate"
         assert value["settings_key"] == "xinput"
-        assert value["version"] == "0.3.0"
+        assert value["version"] == "0.3.2"
         assert isinstance(value["config"], dict)
         assert isinstance(value["params"], dict)
         assert "mods" not in value
